@@ -209,7 +209,7 @@ class SingleServerIRCBot(SimpleIRCClient):
         """
         return "pyBoter64 by Mephiston <meph.snake@gmail.com>"
 
-    def jump_server(self, msg="Cambiando servidores"):
+    def jump_server(self, msg="Changing hosts"):
         """Connect to a new server, possibly disconnecting from the current.
 
         The bot will skip to next server in the server_list each time

@@ -256,7 +256,7 @@
 
 	* Released version 0.3.4.
 
-	Corrected problems spotted by Markku Hänninen <hmm@iki.fi>:
+	Corrected problems spotted by Markku HÃ¤nninen <hmm@iki.fi>:
 
 	* irccat2 (IRCCat.on_welcome): Added missing connection argument.
 	(IRCCat.on_join): Likewise.

@@ -1,0 +1,396 @@
+#! /usr/bin/env python
+#*.*coding:utf-8*.*
+#
+# Example program using ircbot.py.
+#
+# Joel Rosdahl <joel@rosdahl.net>
+
+#       pyboter64.py written in python2.8
+#       version 1.1
+#       Copyright 2010 Mephiston <meph.snake@gmail.com>
+#
+#       This program is free software; you can redistribute it and/or modify
+#       it under the terms of the GNU General Public License as published by
+#       the Free Software Foundation; either version 3.0 of the License, or
+#       (at your option) any later version.
+#
+#       This program is distributed in the hope that it will be useful,
+#       but WITHOUT ANY WARRANTY; without even the implied warranty of
+#       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#       GNU General Public License for more details.
+#
+#       You should have received a copy of the GNU General Public License
+#       along with this program; if not, get a copy on http://www.gnu.org/licenses/gpl.txt
+
+#   ---------------- Generic utilities ---------------- #
+#   A usefull an fun bot for irc using python-irclib, and ircbot of Joel Rosdahl <joel@rosdahl.net> as base.
+
+"""Pytboter.
+"""
+#~ Import builtin libraries of python
+import exceptions
+from traceback import format_exc
+from urllib import urlencode, urlopen
+from datetime import date
+from time import time, asctime, localtime
+from base64 import b64encode, b64decode
+from sys import argv, exc_info
+
+
+#~ Import non-builtin libraries of python
+try:
+    from ircbot import SingleServerIRCBot
+except:
+    print "python-ircbot Not found."
+try:
+    from irclib import nm_to_n, nm_to_h, irc_lower, ip_numstr_to_quad, ip_quad_to_numstr
+except:
+    print "python-irclib Not found."
+try:
+    from httplib import HTTPConnection
+except:
+    print "python-httplib Not found."
+try:
+    import MySQLdb
+except:
+    print "python-MySQLdb  Not found."
+    
+try:
+    from BeautifulSoup import BeautifulSoup
+except:
+    print "python-beautifulsoup Not found"
+
+
+#~  FIRST SQL DICTIONARIES
+sqldetails={
+    "status": 0,
+    "host":"localhost",
+    "passwd":"pyboter1.0",
+    "user":"pyboter",
+    "db":"pyboter",
+    "quote": "SELECT `texts` FROM `quotes` WHERE `type`='%.1s' ORDER BY RAND() LIMIT 1,1;",
+    "nick": "SELECT `nick`,`perm` FROM `users` WHERE `nick`='%s' AND `password`='%s' AND (`perm`='777' OR `perm`='666') LIMIT 1",
+    "create_temporary_users":"CREATE TEMPORARY TABLE `temp_users` (`id` int(11) NOT NULL auto_increment,`nick` VARCHAR(16) NOT NULL default 'mephiston', `perm`  INT(3) UNSIGNED ZEROFILL default '777', PRIMARY KEY (`id`), UNIQUE KEY `id` (`id`), UNIQUE (`nick`));",
+    "init_temporary_nick": "INSERT IGNORE INTO `temp_users` (`nick`,`perm`) values('%s', '777');",
+    "insert_nick": "INSERT IGNORE INTO `users` (`users`,`password`,`perm`) values('%s', %s ,'%s');",
+    "insert_temporary_nick": "INSERT IGNORE INTO `temp_users` (`nick`,`perm`) values('%s', '%s');",
+    #~ "delete_nick": "INSERT IGNORE INTO `users` (`users`,`password`,`perm`) values('%s', %s ,'%s');",
+    #~ "delete_temporary_nick": "INSERT IGNORE INTO `temp_users` (`nick`,`perm`) values('%s', '%s');",
+    "temporary_nick": "SELECT `nick` FROM `temp_users` WHERE `nick`='%s' AND (`perm`='777' OR `perm`='666') LIMIT 1",
+    "owners": ["mephiston", "meph"],
+    "owned": False
+}
+#~ SQL FUNCTION DEFINITIONS
+
+def mysql_never():
+    return False
+    
+def sql_on():
+    global conn
+    sqldetails["status"]=1
+    conn = MySQLdb.connect (host = sqldetails["host"], user = sqldetails["user"], passwd = sqldetails["passwd"], db = sqldetails["db"])
+    
+def sql_off():
+    sqldetails["status"]=0
+    try:
+        conn.close()
+    except:
+        return mysql_never()
+
+def sql_simple(nick):
+    try:
+        cursor = conn.cursor()
+    except:
+        print "Cursor no establecido"
+    try:
+        cursor.execute(sqldetails["create_temporary_users"])
+    except:
+        print "Cursor no ejecutado"
+    try:
+        cursor.execute(sqldetails["init_temporary_nick"] % nick)
+    except:
+        print "Cursor no ejecutado"
+    try:
+        return cursor.fetchall()
+    except:
+        print "Cursor no asociado"
+def sql_quote(typus):
+    try:
+        cursor = conn.cursor()
+    except:
+        print "Cursor no establecido"
+    try:
+        cursor.execute(sqldetails["quote"] % typus)
+    except:
+        print "Cursor no ejecutado"
+    try:
+        return cursor.fetchone()
+    except:
+        print "Cursor no asociado"
+
+def sql_identify(nick, password):
+    try:
+        cursor = conn.cursor()
+    except:
+        print "Cursor no establecido"
+    try:
+        if cursor.execute(sqldetails["nick"] % (nick, b64encode(str(password)))) == 1:
+            try:
+                temporal_nick,temporal_perm,=cursor.fetchone()
+                try:
+                    cursor.execute(sqldetails["insert_temporary_nick"] % (temporal_nick, temporal_perm))
+                except:
+                    print "Cursor no asociado"
+                return True
+            except:
+                print "Cursor no asociado"
+                return False
+        elif cursor.execute(sqldetails["nick"] % (nick, b64encode(password))) == 0:
+            print "%s ha fallado con %s" % (nick, password)
+        
+    except:
+        print "Cursor no ejecutado"
+        return False
+        
+def sql_allow(nick):
+    #~ print sqldetails["temporary_nick"] % nick
+    try:
+        cursor = conn.cursor()
+    except:
+        print "Cursor no establecido"
+    try:
+        if cursor.execute(sqldetails["temporary_nick"] % nick) == 1:
+            #~ print sqldetails["temporary_nick"] % nick
+            try:
+                return True
+            except:
+                print "Cursor no asociado"
+                return False
+    except:
+        print "Cursor no ejecutado"
+#~ SECOND SQL DICTIONARIES
+
+sqlrun={
+    "on": sql_on,
+    "off": sql_off
+}
+
+status={
+    0:"La conexión SQL no se ha establecido. Puede establecerla escribiendo !sql on",
+    1:"La conexión SQL esta establecida.  Puede cerrarla escribiendo !sql off"
+}
+
+class TestBot(SingleServerIRCBot):
+    #~ GLOBAL VARIABLES
+    def __init__(self, channel, varNickname, varServer, varPort=6667):
+        SingleServerIRCBot.__init__(self, [(varServer, varPort)], varNickname, varNickname)
+        self.channel = channel
+
+    def on_nicknameinuse(self, varChat, varEvent):
+        varChat.nick(varChat.get_nickname() + "_")
+
+    def on_welcome(self, varChat, varEvent):
+        varChat.join(self.channel)
+        varChat.privmsg( self.channel, str(varChat.get_nickname())+" a vuestro servicio")
+    def identify_owner(self,nick,varSay):
+        if nick in sqldetails["owners"]:
+            if b64encode(varSay) == "cHlib3RlcjEuMA==":
+                print "propietario correcto"
+                sqldetails["owned"] = True
+            else:
+                print "propietario incorrecto"
+                sqldetails["owned"] = False
+    def identify_other(self, nick, varSay):
+        if sqldetails["status"] == 1:
+            password=varSay
+            sql_identify(nick, password)
+                
+    def on_privmsg(self, varChat, varEvent):
+        nick = nm_to_n(varEvent.source())
+        self.do_command(varEvent, varEvent.arguments()[0])
+        varSay=("".join(varEvent.arguments()[0].split(":", 1))).split()
+        if len(varSay) == 2:
+            if varSay[0] == "!own":
+                    self.identify_owner(nick, varSay[1])
+            if varSay[0] == "identify":
+                    self.identify_other(nick, varSay[1])
+        if len(varSay) == 1:
+            if "!muere" == varSay[0]:
+                if ((sqldetails["status"] == 0)):
+                    if  (sqldetails["owned"] == True):
+                        if nick in sqldetails["owners"]:
+                                self.die()
+                if (sqldetails["status"] == 1):
+                    if sql_allow(nick) == True:
+                        row=sql_quote("0")
+                        varChat.privmsg( self.channel, "%s" % row[0])
+                        sql_off()
+                        self.die()
+        if len(varSay) > 1:
+            try:
+                if "!say" == varSay[0]:
+                    try:
+                        varChat.privmsg( self.channel, "%s" % varEvent.arguments()[0].replace("!say",""))
+                    except:
+                        exc_type, exc_value, exc_traceback = exc_info()
+                        formatted_lines = format_exc().splitlines()
+                        print " ".join(formatted_lines)
+            except:
+                exc_type, exc_value, exc_traceback = exc_info()
+                formatted_lines = format_exc().splitlines()
+                print " ".join(formatted_lines)
+                
+
+    def on_pubmsg(self, varChat, varEvent):
+        a = varEvent.arguments()[0].split(":", 1)
+        #if len(a) > 1 and irc_lower(a[0]) == irc_lower(self.connection.get_nickname()):
+            #self.do_command(varEvent, a[1].strip())
+        self.do_command(varEvent, a[0].strip())
+        return
+
+    def on_dccmsg(self, varChat, varEvent):
+        varChat.privmsg("Has dicho: " + varEvent.arguments()[0])
+
+    def on_dccchat(self, varChat, varEvent):
+        if len(varEvent.arguments()) != 2:
+            return
+        args = varEvent.arguments()[1].split()
+        if len(args) == 4:
+            try:
+                address = ip_numstr_to_quad(args[2])
+                varPort = int(args[3])
+            except ValueError:
+                return
+            self.dcc_connect(address, varPort)
+            
+    def do_command(self, varEvent, cmd):
+        nick = nm_to_n(varEvent.source())
+        varChat = self.connection
+        varSay=(nick+ ": "+"".join(varEvent.arguments()[0].split(":", 1))).split()
+
+        #~ elif cmd == "!sqlon" and nick=="mephiston":
+            #~ varChat.privmsg( self.channel, "Conexión con SQL establecida")
+            #~ sqldetails["state"] = 1
+        if ("!sql" in varSay):
+                if len(varSay) <3:
+                    varChat.privmsg( self.channel, status[sqldetails["status"]])
+                else:
+                    if (sqldetails["owned"] == True):
+                        if nick in sqldetails["owners"]:
+                            try:
+                                if sqlrun[varSay[2]]() == False:
+                                    varChat.privmsg( self.channel, status[sqldetails["status"]])
+                                    print ""
+                                if sqldetails["status"] == 1:
+                                    sql_simple(nick)
+                            except KeyError:
+                                exc_type, exc_value, exc_traceback = exc_info()
+                                formatted_lines = format_exc().splitlines()
+                                print " ".join(formatted_lines)
+                    else:
+                        sqldetails["owned"] = sqldetails["owned"]
+                        #~ print sqldetails["status"]
+                varChat.privmsg( self.channel, status[sqldetails["status"]])
+        elif "!imagen" in varSay:
+            if len(varSay) <3:
+                varChat.privmsg( self.channel, "Por favor, especifica sobre que quieres buscar imágenes. Ejemplo: !imagen Python")
+            else:
+                imagen=varSay[2]
+                soup = BeautifulSoup((urlopen("http://www.flickr.com/badge_code_v2.gne?%s&tag=%s" % (urlencode({'count': 1, 'display': "popular", 'size': "m", "layout":"x", "source":"all_tag"}), imagen))).read())
+                try:
+                    soaped = soup.findAll("div",id="flickr_badge_image1")[0].findAll("img")[0]["src"].replace("_m.jpg",".jpg")
+                except IndexError:
+                    soaped = "Lo siento, no puedo encontrar fotos de %s, si quieres busca tu por Google en el enlace anterior."
+                    varChat.privmsg( self.channel, "http://images.google.es/images?um=1&q=es&q="+imagen+"&btnG")
+                varChat.privmsg( self.channel, "%s" % soaped)
+        elif "!wiki" in varSay:
+            if len(varSay) <3:
+                varChat.privmsg( self.channel, " ¡Error! Debes especificar que quieres buscar Ejemplo: !wiki Linux")
+            else:
+                #~ print varSay[2:]
+                #imagen=varSay[2]
+                busqueda=[]
+                for x in varSay[2:]:
+                    busqueda.append(x)
+                    busqueda.append("+")
+                final=len(busqueda)-1
+                varChat.privmsg( self.channel, "http://es.wikipedia.org/w/index.php?title=Especial%3ABuscar&search="+"".join(busqueda[:final])+"&go=Ir")
+        elif cmd == "!desconecta":
+            self.disconnect()
+        elif cmd.lower() == "hola":
+            varChat.privmsg( self.channel, "Muy buenas!")
+        elif cmd == "!muere":
+            if ((sqldetails["status"] == 0)):
+                if  (sqldetails["owned"] == True):
+                    if nick in sqldetails["owners"]:
+                            self.die()
+            if (sqldetails["status"] == 1):
+                if sql_allow(nick) == True:
+                    row=sql_quote("0")
+                    varChat.privmsg( self.channel, "%s" % row[0])
+                    sql_off()
+                    self.die()
+        elif cmd.lower() == "!owner":
+            actual_time = asctime(localtime())
+            varChat.privmsg( self.channel, "%s" % actual_time)
+            varChat.privmsg( self.channel, "Este bot está enteramente creado en Python y MySQL.")
+            varChat.privmsg( self.channel, "Un experimento para demostrar el potencial de Python")
+            varChat.privmsg( self.channel, "Creado por Daniel Ripol (Mephiston)")
+            varChat.privmsg( self.channel, "En fecha: 19 de Setiembre de 2010")
+            varChat.privmsg( self.channel, "Agradecimientos a: Choms, por empezar su bot en php, Dahrkael por su bot en ruby, y a mis compañeros pythoneros")
+        elif cmd == "!estado":
+            for chname, chobj in self.channels.items():
+                varChat.notice(nick, "--- Estadisticas del canal ---")
+                varChat.notice(nick, "Channel: " + chname)
+                users = chobj.users()
+                users.sort()
+                varChat.notice(nick, "Usuarios: " + ", ".join(users))
+                opers = chobj.opers()
+                opers.sort()
+                varChat.notice(nick, "Operadores: " + ", ".join(opers))
+                voiced = chobj.voiced()
+                voiced.sort()
+                varChat.notice(nick, "Voz: " + ", ".join(voiced))
+        elif cmd == "!VERSION":
+            dcc = self.dcc_listen()
+            varChat.ctcp("VERSION", nick, "pyBoter64 Python IRC %s %d" % (
+                ip_quad_to_numstr(dcc.localaddress),
+                dcc.localport))
+        elif cmd == "!rodadora":
+            varChat.privmsg( self.channel, "."*6+"@")
+            varChat.privmsg( self.channel, "."*12+"@")
+            varChat.privmsg( self.channel, "."*18+"@")
+            varChat.privmsg( self.channel, "."*24+"@")
+        elif cmd == "!año":
+            now = date.today()
+            newyear = date(2010, 12, 31)
+            cik = newyear - now
+            restdays = cik.days
+            varChat.privmsg( self.channel, "Faltan "+str(restdays)+" días para fin de año")
+        else:
+            #varChat.notice(nick, "Comando no encontrado: " + "".join(varEvent.arguments()[0].split(":", 1)))
+            print (nick+ ": "+"".join(varEvent.arguments()[0].split(":", 1)))
+
+def main():
+    if len(argv) != 4:
+        print "Usage: testbot <server[:port]> <channel> <nickname>"
+        exit(1)
+
+    varSystem = argv[1].split(":", 1)
+    varServer = varSystem[0]
+    if len(varSystem) == 2:
+        try:
+            varPort = int(varSystem[1])
+        except ValueError:
+            print "Error: Puerto erroneo."
+            exit(1)
+    else:
+        varPort = 6667
+    channel = argv[2]
+    varNickname = argv[3]
+
+    bot = TestBot(channel, varNickname, varServer, varPort)
+    bot.start()
+
+if __name__ == "__main__":
+    main()
